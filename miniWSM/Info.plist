@@ -9,9 +9,9 @@
 	<key>CFBundleDisplayName</key>
 	<string>EW-DX Monitor</string>
 	<key>CFBundleVersion</key>
-	<string>1.0</string>
+	<string>0.2.1</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0</string>
+	<string>0.2.1</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.6</string>
 	<key>NSHumanReadableCopyright</key>

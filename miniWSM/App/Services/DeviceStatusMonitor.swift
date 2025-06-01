@@ -264,6 +264,9 @@ class DeviceStatusMonitor: ObservableObject {
                 }
                 self.chargingBayStatuses = mergedBayStatuses
                 
+                // 임시 배열 정리
+                allBayStatuses.removeAll()
+                
                 // 중복되지 않은 베이만 로그 출력
                 for (index, bay) in mergedBayStatuses.enumerated() {
                     if bay.hasDevice && !self.loggedBayIds.contains(index) {

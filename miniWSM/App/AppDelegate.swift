@@ -65,32 +65,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     
+    private var isHandlingSettingsChange = false
+    
     private func setupSettingsSubscriptions() {
-        // UserDefaults 변경 구독
-        NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
-            .debounce(for: .seconds(0.5), scheduler: DispatchQueue.main) // 빠른 연속 변경 방지
-            .sink { [weak self] _ in
-                self?.handleSettingsChanged()
-            }
-            .store(in: &cancellables)
-        
-        // 장치 목록 변경 구독
+        // 장치 목록 변경 구독만 활성화
         DeviceManager.shared.deviceListPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
+                SSCLogger.log("장치 목록 변경 감지", category: .debug, level: .verbose)
                 self?.handleSettingsChanged()
             }
             .store(in: &cancellables)
         
-        // 설정 변경 알림 구독
-        NotificationCenter.default.publisher(for: Notification.Name("SettingsChanged"))
-            .sink { [weak self] _ in
-                self?.handleSettingsChanged()
-            }
-            .store(in: &cancellables)
+        // UserDefaults와 SettingsChanged 알림은 임시로 비활성화
+        // 무한 루프를 일으킬 가능성이 있음
     }
     
     private func handleSettingsChanged() {
+        // 이미 설정 변경을 처리 중이면 무시
+        guard !isHandlingSettingsChange else {
+            SSCLogger.log("설정 변경 처리 중 - 중복 호출 무시", category: .debug, level: .verbose)
+            return
+        }
+        
         SSCLogger.log("설정 변경 감지", category: .info)
         
         // 배터리 시뮬레이션 중이면 설정 변경 무시
@@ -98,20 +95,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         
-        // 모니터링 재시작
-        deviceStatusMonitor?.stopMonitoring()
-        deviceStatusMonitor = DeviceStatusMonitor()
-        deviceStatusMonitor?.startMonitoring()
+        // 재진입 방지 플래그 설정
+        isHandlingSettingsChange = true
         
-        // 팝오버 뷰 업데이트
-        if let popover = popover, let monitor = deviceStatusMonitor {
-            let contentView = PopoverView(monitor: monitor)
-            popover.contentViewController = NSHostingController(rootView: contentView)
-        }
-        
-        // 상태바 컨트롤러의 monitor 참조 업데이트
-        if let statusBarController = statusBarController, let monitor = deviceStatusMonitor {
-            statusBarController.updateMonitor(monitor)
+        // 모니터링 재시작을 메인 큐에서 실행
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            
+            // 모니터링 재시작
+            self.deviceStatusMonitor?.stopMonitoring()
+            self.deviceStatusMonitor = DeviceStatusMonitor()
+            self.deviceStatusMonitor?.startMonitoring()
+            
+            // 팝오버 뷰 업데이트
+            if let popover = self.popover, let monitor = self.deviceStatusMonitor {
+                let contentView = PopoverView(monitor: monitor)
+                popover.contentViewController = NSHostingController(rootView: contentView)
+            }
+            
+            // 상태바 컨트롤러의 monitor 참조 업데이트
+            if let statusBarController = self.statusBarController, let monitor = self.deviceStatusMonitor {
+                statusBarController.updateMonitor(monitor)
+            }
+            
+            // 처리 완료 후 플래그 해제
+            self.isHandlingSettingsChange = false
         }
     }
     
