@@ -119,6 +119,9 @@ class DeviceStatusMonitor: ObservableObject {
     func stopMonitoring() {
         SSCLogger.log("모니터링 중지", category: .info)
         
+        // 업데이트 중단
+        isUpdating = false
+        
         // 구독 취소
         cancellables.forEach { $0.cancel() }
         cancellables.removeAll()
@@ -130,6 +133,16 @@ class DeviceStatusMonitor: ObservableObject {
         for client in receiverClients {
             client.disconnect()
         }
+        
+        // 클라이언트 목록 정리
+        chargerClients.removeAll()
+        receiverClients.removeAll()
+        
+        // 상태 데이터 정리
+        chargingBayStatuses.removeAll()
+        micStatuses.removeAll()
+        loggedBayIds.removeAll()
+        loggedMicIds.removeAll()
     }
     
     // MARK: - 업데이트 사이클
@@ -150,6 +163,32 @@ class DeviceStatusMonitor: ObservableObject {
         loggedMicIds.removeAll()
         
         SSCLogger.logCycleStart(cycleNumber: cycleCount)
+        
+        // 메모리 사용량 로그 (디버깅용)
+        if cycleCount % 10 == 0 {  // 10 사이클마다 체크
+            // 메모리 정보
+            var info = mach_task_basic_info()
+            var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
+            
+            let result = withUnsafeMutablePointer(to: &info) {
+                $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
+                    task_info(mach_task_self_,
+                             task_flavor_t(MACH_TASK_BASIC_INFO),
+                             $0,
+                             &count)
+                }
+            }
+            
+            if result == KERN_SUCCESS {
+                let memoryUsageMB = Double(info.resident_size) / 1024.0 / 1024.0
+                SSCLogger.log("시스템 상태 (사이클 \(cycleCount)): 메모리 사용량 \(String(format: "%.1f", memoryUsageMB)) MB", category: .debug)
+                
+                // 메모리가 비정상적으로 많으면 경고
+                if memoryUsageMB > 500 {
+                    SSCLogger.log("⚠️ 메모리 사용량 경고: \(String(format: "%.1f", memoryUsageMB)) MB (정상: 50-200 MB)", category: .warning)
+                }
+            }
+        }
         
         // 충전기 베이 상태 확인
         updateChargingBays()
@@ -292,7 +331,7 @@ class DeviceStatusMonitor: ObservableObject {
             }
             
             // 모든 마이크 확인 완료
-            dispatchGroupMic.notify(queue: .global()) {
+            dispatchGroupMic.notify(queue: .main) {
                 // 결과 저장
                 allMicStatuses.append(micStatuses)
                 
@@ -314,6 +353,9 @@ class DeviceStatusMonitor: ObservableObject {
             for micArray in allMicStatuses {
                 newMicStatuses.append(contentsOf: micArray)
             }
+            
+            // 임시 배열 정리
+            allMicStatuses.removeAll()
             
             // 최종 마이크 상태 처리
             let finalMicStatuses = self.processMicStatuses(newMicStatuses)

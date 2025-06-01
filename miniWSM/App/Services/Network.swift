@@ -8,12 +8,30 @@
 import Foundation
 import Network
 
+// MARK: - 상수 정의
+private enum NetworkConstants {
+    static let defaultPort: UInt16 = 45
+    static let scanTimeout: TimeInterval = 0.5
+    static let deviceCheckDelay: TimeInterval = 0.2
+    static let reconnectBaseDelay: TimeInterval = 5.0
+    static let maxReconnectDelay: TimeInterval = 80.0
+    static let maxReconnectAttempts = 5
+}
+
 // MARK: - SSC 클라이언트
 class SSCClient {
+    // 모든 인스턴스가 공유하는 큐 (스레드 생성 방지)
+    private static let sharedQueue = DispatchQueue(label: "com.ewdx.udpqueue", attributes: .concurrent)
+    
     private var _connection: NWConnection?
     public let deviceIP: String
     private let devicePort: UInt16
-    private let queue = DispatchQueue(label: "com.ewdx.udpqueue")
+    private let queue = SSCClient.sharedQueue
+    
+    // 재연결 관리
+    private var reconnectAttempts = 0
+    private let maxReconnectAttempts = NetworkConstants.maxReconnectAttempts
+    private let reconnectBaseDelay = NetworkConstants.reconnectBaseDelay
     
     // Thread-safe properties
     private let propertyLock = NSLock()
@@ -59,7 +77,7 @@ class SSCClient {
         }
     }
     
-    init(deviceIP: String, devicePort: UInt16 = 45) {
+    init(deviceIP: String, devicePort: UInt16 = NetworkConstants.defaultPort) {
         self.deviceIP = deviceIP
         self.devicePort = devicePort
     }
@@ -76,6 +94,8 @@ class SSCClient {
             switch state {
             case .ready:
                 SSCLogger.log("UDP 연결 준비 완료: \(self?.deviceIP ?? "") (연결 성공)", category: .network)
+                // 연결 성공 시 재연결 카운터 리셋
+                self?.reconnectAttempts = 0
                 
                 // 연결 확인 및 디바이스 타입 감지
                 if !(self?.isDetectingType ?? true) {
@@ -199,7 +219,20 @@ class SSCClient {
     }
     
     private func reconnect() {
-        queue.asyncAfter(deadline: .now() + 5) { [weak self] in
+        reconnectAttempts += 1
+        
+        // 최대 재시도 횟수 초과 시 중단
+        guard reconnectAttempts <= maxReconnectAttempts else {
+            SSCLogger.log("최대 재연결 시도 횟수(\(maxReconnectAttempts))를 초과했습니다: \(deviceIP)", category: .error)
+            return
+        }
+        
+        // Exponential Backoff: 5초, 10초, 20초, 40초, 80초
+        let delay = min(reconnectBaseDelay * pow(2.0, Double(reconnectAttempts - 1)), NetworkConstants.maxReconnectDelay)
+        
+        SSCLogger.log("재연결 시도 \(reconnectAttempts)/\(maxReconnectAttempts) - \(Int(delay))초 후: \(deviceIP)", category: .network)
+        
+        queue.asyncAfter(deadline: .now() + delay) { [weak self] in
             self?.connect()
         }
     }
@@ -392,7 +425,7 @@ class DeviceScanner {
             
             // 타임아웃 설정 - 메인 스레드에서만 Timer 생성
             DispatchQueue.main.async {
-                Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [weak self] _ in
+                Timer.scheduledTimer(withTimeInterval: NetworkConstants.scanTimeout, repeats: false) { [weak self] _ in
                     guard let self = self else { return }
                     
                     if !operation.isCompleted {
@@ -423,8 +456,8 @@ class DeviceScanner {
             
             client.connect()
             
-            // 0.2초 후 장치 조회 시도
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            // 장치 조회 지연 시간 후 시도
+            DispatchQueue.main.asyncAfter(deadline: .now() + NetworkConstants.deviceCheckDelay) { [weak self] in
                 // 이미 타임아웃 되었거나 취소된 경우
                 if operation.isTimedOut || (self?.isCancelled ?? false) {
                     // 클라이언트 목록에서 제거
@@ -541,8 +574,20 @@ class DeviceScanner {
             }
             
             SSCLogger.log("스캔 완료. 발견된 장치: \(foundDevices.count)개", category: .success)
+            
+            // 활성 클라이언트 목록 정리
+            self.clientsLock.lock()
+            self.activeClients.forEach { $0.disconnect() }
+            self.activeClients.removeAll()
+            self.clientsLock.unlock()
+            
             completion(foundDevices)
         }
+    }
+    
+    deinit {
+        // 정리 작업
+        cancelScan()
     }
 }
 

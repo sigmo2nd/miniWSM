@@ -120,121 +120,42 @@ class DeviceClient {
     
     // MARK: - 마이크 상태 조회
     
-    /// 마이크 상태 조회
+    /// 마이크 상태 조회 - 간소화 버전 (배터리 정보만)
     func queryMicStatus(channel: Int, completion: @escaping (MicStatus?) -> Void) {
-        let rxPath = channel == 1 ? "rx1" : "rx2"
-        let txPath = channel == 1 ? "tx1" : "tx2"
-        
-        // 데이터 저장 변수
-        var name = "마이크 \(channel)"
-        var batteryPercentage = 0
-        var signalStrength = 0
-        var batteryRuntime = 0
-        var hasWarning = false
-        var errorDetected = false
-        
-        // 디스패치 그룹 생성
-        let dispatchGroup = DispatchGroup()
-        
-        // 1. 이름 조회
-        dispatchGroup.enter()
-        sendRawMessage("{\"\(rxPath)\":{\"name\":null}}") { data, error in
-            defer { dispatchGroup.leave() }
-            
-            if let data = data, error == nil,
-               let micName = SSCResponseParser.parseRXName(from: data, channel: channel) {
-                name = micName
-                SSCLogger.log("마이크 \(channel) 이름: \(micName)", category: .info, level: .debug)
-            } else {
-                errorDetected = true
-                SSCLogger.log("마이크 \(channel) 이름 조회 실패", category: .warning)
-            }
+        // 연결 확인
+        guard isConnected else {
+            completion(nil)
+            return
         }
         
-        // 2. 배터리 레벨 조회
-        dispatchGroup.enter()
-        sendRawMessage("{\"mates\":{\"\(txPath)\":{\"battery\":{\"gauge\":null}}}}") { data, error in
-            defer { dispatchGroup.leave() }
+        let txPath = channel == 1 ? "tx1" : "tx2"
+        
+        // 배터리 정보만 간단히 조회
+        sendRawMessage("{\"mates\":{\"\(txPath)\":{\"battery\":{\"gauge\":null}}}}") { [weak self] data, error in
+            guard let self = self else {
+                completion(nil)
+                return
+            }
+            
+            var batteryPercentage = 0
             
             if let data = data, error == nil,
                let gauge = SSCResponseParser.parseTXBatteryGauge(from: data, channel: channel) {
                 batteryPercentage = gauge
-                SSCLogger.log("마이크 \(channel) 배터리: \(gauge)%", category: .battery, level: .debug)
-            } else {
-                errorDetected = true
-                SSCLogger.log("마이크 \(channel) 배터리 조회 실패", category: .warning)
-            }
-        }
-        
-        // 3. 신호 강도 조회
-        dispatchGroup.enter()
-        sendRawMessage("{\"m\":{\"\(rxPath)\":{\"rsqi\":null}}}") { data, error in
-            defer { dispatchGroup.leave() }
-            
-            if let data = data, error == nil,
-               let strength = SSCResponseParser.parseSignalStrength(from: data, channel: channel) {
-                signalStrength = strength
-                SSCLogger.log("마이크 \(channel) 신호 강도: \(strength)", category: .info, level: .debug)
-            } else {
-                errorDetected = true
-                SSCLogger.log("마이크 \(channel) 신호 강도 조회 실패", category: .warning)
-            }
-        }
-        
-        // 4. 배터리 수명 조회
-        dispatchGroup.enter()
-        sendRawMessage("{\"mates\":{\"\(txPath)\":{\"battery\":{\"lifetime\":null}}}}") { data, error in
-            defer { dispatchGroup.leave() }
-            
-            if let data = data, error == nil,
-               let lifetime = SSCResponseParser.parseTXBatteryLifetime(from: data, channel: channel) {
-                batteryRuntime = lifetime
-                SSCLogger.log("마이크 \(channel) 배터리 런타임: \(lifetime)분", category: .battery, level: .debug)
-            } else {
-                SSCLogger.log("마이크 \(channel) 배터리 런타임 조회 실패", category: .warning, level: .debug)
-            }
-        }
-        
-        // 5. 경고 조회
-        dispatchGroup.enter()
-        sendRawMessage("{\"mates\":{\"\(txPath)\":{\"warnings\":null}}}") { data, error in
-            defer { dispatchGroup.leave() }
-            
-            if let data = data, error == nil,
-               let warnings = SSCResponseParser.parseTXWarnings(from: data, channel: channel) {
-                hasWarning = !warnings.isEmpty
-                if !warnings.isEmpty {
-                    SSCLogger.log("마이크 \(channel) 경고 발견: \(warnings)", category: .warning)
-                }
-            } else {
-                SSCLogger.log("마이크 \(channel) 경고 조회 실패", category: .warning, level: .debug)
-            }
-        }
-        
-        // 모든 조회 완료 후 마이크 상태 생성
-        dispatchGroup.notify(queue: .global()) {
-            let micState: MicStateType
-            
-            if errorDetected || batteryPercentage <= 0 {
-                micState = .disconnected
-            } else if signalStrength > 0 {
-                micState = .active
-            } else {
-                micState = .charging
             }
             
             let status = MicStatus(
-                id: channel - 1, // 채널 1은 ID 0
-                name: name,
+                id: channel - 1,
+                name: "마이크 \(channel)",
                 batteryPercentage: batteryPercentage,
-                signalStrength: signalStrength,
-                batteryRuntime: batteryRuntime,
-                warning: hasWarning,
-                state: micState,
+                signalStrength: 0,
+                batteryRuntime: 0,
+                warning: false,
+                state: batteryPercentage > 0 ? .charging : .disconnected,
                 sourceDevice: self.deviceInfo
             )
             
-            SSCLogger.log("마이크 \(channel) 상태 조회 완료: \(status.state.description)", category: .info)
+            SSCLogger.log("마이크 \(channel) 상태: \(batteryPercentage)%", category: .battery, level: .debug)
             completion(status)
         }
     }

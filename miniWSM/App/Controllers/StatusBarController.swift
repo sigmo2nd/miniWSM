@@ -68,7 +68,9 @@ class StatusBarController {
         // 알림 관찰자 제거
         NotificationCenter.default.removeObserver(self)
         simulationTimer?.invalidate()
+        simulationTimer = nil
         cancellables.forEach { $0.cancel() }
+        cancellables.removeAll()
     }
     
     // 모니터 참조 업데이트 (설정 변경 시 사용)
@@ -285,10 +287,13 @@ class StatusBarController {
     func stopBatterySimulation() {
         SSCLogger.log("배터리 시뮬레이션 중지", category: .battery)
         
-        // 타이머 중지
+        // 타이머 중지 및 정리
         simulationTimer?.invalidate()
         simulationTimer = nil
         batterySimulationActive = false
+        
+        // 시뮬레이션 데이터 정리
+        simulationMicStatuses.removeAll()
     }
     
     // 배터리 감소 처리

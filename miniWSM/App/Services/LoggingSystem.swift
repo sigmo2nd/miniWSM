@@ -176,6 +176,12 @@ class SSCLogger {
                 return
             }
             
+            // 오래된 요청 정리 (30초 이상 응답 없는 요청 제거)
+            if SSCLogger.activeRequests.count > 100 {
+                SSCLogger.activeRequests.removeAll()
+                SSCLogger.log("활성 요청 목록 초기화됨", category: .debug, level: .verbose)
+            }
+            
             if let error = error {
                 // 에러 시 현재 프로그레스 줄 종료
                 if SSCLogger.isProgressLine {
